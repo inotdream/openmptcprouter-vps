@@ -16,6 +16,8 @@ RAW_BASE=${GATHER_VPS_RAW_BASE:-https://raw.githubusercontent.com/inotdream/open
 # ships a maintained 6.1 kernel, so use 6.1 by default. Use 6.6 only with
 # pinned kernel deb URLs and a passing gather-mptcp-check result.
 : "${KERNEL:=6.1}"
+: "${UPDATE_OS:=no}"
+: "${FORCE_UPDATE_OS:=no}"
 : "${SHADOWSOCKS:=yes}"
 : "${SHADOWSOCKS_GO:=yes}"
 : "${GLORYTUN_TCP:=yes}"
@@ -37,7 +39,7 @@ RAW_BASE=${GATHER_VPS_RAW_BASE:-https://raw.githubusercontent.com/inotdream/open
 : "${OMR_ADMIN_REPO:=Ysurac/openmptcprouter-vps-admin}"
 : "${OMR_ADMIN_VERSION:=develop}"
 
-export KERNEL SHADOWSOCKS SHADOWSOCKS_GO GLORYTUN_TCP GLORYTUN_UDP MQVPN OPENVPN DSVPN WIREGUARD
+export KERNEL UPDATE_OS FORCE_UPDATE_OS SHADOWSOCKS SHADOWSOCKS_GO GLORYTUN_TCP GLORYTUN_UDP MQVPN OPENVPN DSVPN WIREGUARD
 export GATHER_DEFAULT_VPN GATHER_DEFAULT_PROXY GATHER_MPTCP_PROFILE
 export GATHER_KERNEL_IMAGE_DEB_URL GATHER_KERNEL_HEADERS_DEB_URL
 export OMR_ADMIN_SOURCE OMR_ADMIN_REPO OMR_ADMIN_VERSION
@@ -54,6 +56,7 @@ fetch_file() {
 
 echo "Gather VPS bootstrap"
 echo "  kernel: ${KERNEL}"
+echo "  update os: ${UPDATE_OS}"
 echo "  default vpn/proxy: ${GATHER_DEFAULT_VPN} / ${GATHER_DEFAULT_PROXY}"
 echo "  mptcp profile: ${GATHER_MPTCP_PROFILE}"
 echo "  omr-admin: ${OMR_ADMIN_REPO}@${OMR_ADMIN_VERSION}"
