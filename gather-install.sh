@@ -9,6 +9,7 @@
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+RAW_BASE=${GATHER_VPS_RAW_BASE:-https://raw.githubusercontent.com/inotdream/openmptcprouter-vps/develop}
 
 # Gather production image default:
 # 6.12 has been observed not aggregating reliably on current nodes. Use 6.6
@@ -40,6 +41,16 @@ export GATHER_DEFAULT_VPN GATHER_DEFAULT_PROXY GATHER_MPTCP_PROFILE
 export GATHER_KERNEL_IMAGE_DEB_URL GATHER_KERNEL_HEADERS_DEB_URL
 export OMR_ADMIN_SOURCE OMR_ADMIN_REPO OMR_ADMIN_VERSION
 
+fetch_file() {
+    url="$1"
+    dest="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL --retry 3 --connect-timeout 15 -o "$dest" "$url"
+        return $?
+    fi
+    wget -O "$dest" "$url"
+}
+
 echo "Gather VPS bootstrap"
 echo "  kernel: ${KERNEL}"
 echo "  default vpn/proxy: ${GATHER_DEFAULT_VPN} / ${GATHER_DEFAULT_PROXY}"
@@ -51,7 +62,19 @@ else
     echo "  kernel deb: Debian bookworm-backports lookup"
 fi
 
-if [ -f "${SCRIPT_DIR}/gather-mptcp-check.sh" ]; then
+if [ ! -s "${SCRIPT_DIR}/debian12-x86_64.sh" ]; then
+    echo "  fetching installer body: ${RAW_BASE}/debian9-x86_64.sh"
+    fetch_file "${RAW_BASE}/debian9-x86_64.sh" "${SCRIPT_DIR}/debian12-x86_64.sh"
+    chmod 0755 "${SCRIPT_DIR}/debian12-x86_64.sh" || true
+fi
+
+if [ ! -s "${SCRIPT_DIR}/gather-mptcp-check.sh" ]; then
+    echo "  fetching mptcp check: ${RAW_BASE}/gather-mptcp-check.sh"
+    fetch_file "${RAW_BASE}/gather-mptcp-check.sh" "${SCRIPT_DIR}/gather-mptcp-check.sh" || true
+    chmod 0755 "${SCRIPT_DIR}/gather-mptcp-check.sh" 2>/dev/null || true
+fi
+
+if [ -s "${SCRIPT_DIR}/gather-mptcp-check.sh" ]; then
     install -m 0755 "${SCRIPT_DIR}/gather-mptcp-check.sh" /usr/local/sbin/gather-mptcp-check || true
 fi
 
