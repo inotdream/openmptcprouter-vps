@@ -12,10 +12,10 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 RAW_BASE=${GATHER_VPS_RAW_BASE:-https://raw.githubusercontent.com/inotdream/openmptcprouter-vps/develop}
 
 # Gather production image default:
-# 6.12 has been observed not aggregating reliably on current nodes. Debian 12
-# ships a maintained 6.1 kernel, so use 6.1 by default. Use 6.6 only with
-# pinned kernel deb URLs and a passing gather-mptcp-check result.
-: "${KERNEL:=6.1}"
+# 6.12 has been observed not aggregating reliably on current nodes. Prefer the
+# OMR/Xanmod 6.6 line for production images; fall back to 6.1 only for recovery
+# builds where kernel package availability is the priority.
+: "${KERNEL:=6.6}"
 : "${UPDATE_OS:=no}"
 : "${FORCE_UPDATE_OS:=no}"
 : "${SHADOWSOCKS:=yes}"

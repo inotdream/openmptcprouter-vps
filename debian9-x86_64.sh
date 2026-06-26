@@ -1118,6 +1118,25 @@ if [ "$OMR_ADMIN" = "yes" ]; then
 		#OMR_ADMIN_PASS=$(cat /etc/openmptcprouter-vps-admin/omr-admin-config.json | jq -r .users[0].openmptcprouter.user_password | tr -d "\n")
 		#OMR_ADMIN_PASS_ADMIN=$(cat /etc/openmptcprouter-vps-admin/omr-admin-config.json | jq -r .users[0].admin.user_password | tr -d "\n")
 	fi
+	if [ -x /usr/bin/omr-admin.py ]; then
+		mkdir -p /usr/local/bin
+		ln -sf /usr/bin/omr-admin.py /usr/local/bin/omr-admin.py
+	fi
+	if [ -x /usr/bin/omr-admin.py ] && [ ! -e /usr/bin/omradmin.py ]; then
+		ln -sf /usr/bin/omr-admin.py /usr/bin/omradmin.py
+	fi
+	if [ -x /usr/bin/omradmin.py ] && [ ! -e /usr/bin/omr-admin.py ]; then
+		ln -sf /usr/bin/omradmin.py /usr/bin/omr-admin.py
+		mkdir -p /usr/local/bin
+		ln -sf /usr/bin/omradmin.py /usr/local/bin/omr-admin.py
+	fi
+	if [ -f /lib/systemd/system/omr-admin.service ]; then
+		if [ -x /usr/bin/omradmin.py ]; then
+			sed -i 's#ExecStart=.*#ExecStart=/usr/bin/omradmin.py#g' /lib/systemd/system/omr-admin.service
+		else
+			sed -i 's#/usr/local/bin/omr-admin.py#/usr/bin/omr-admin.py#g' /lib/systemd/system/omr-admin.service
+		fi
+	fi
 	if [ ! -f /etc/openmptcprouter-vps-admin/key.pem ]; then
 		cd /etc/openmptcprouter-vps-admin
 		openssl req -new -newkey rsa:2048 -days 3650 -nodes -x509 -keyout key.pem -out cert.pem -subj "/C=US/ST=Oregon/L=Portland/O=OpenMPTCProuterVPS/OU=Org/CN=www.openmptcprouter.vps"
@@ -1873,7 +1892,7 @@ if [ "$OPENVPN" = "yes" ]; then
 	if [ "$VERSION_ID" = "13" ] && [ "$ID" = "debian" ]; then
 		apt-get -y --allow-downgrades install openvpn easy-rsa
 	else
-		apt-get -y --default-release install openvpn easy-rsa
+		apt-get -y install openvpn easy-rsa
 	fi
 	#wget -O /lib/systemd/network/openvpn.network ${VPSURL}${VPSPATH}/openvpn.network
 	rm -f /lib/systemd/network/openvpn.network
