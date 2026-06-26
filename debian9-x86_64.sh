@@ -32,8 +32,15 @@ FORCE_UPDATE_OS=${FORCE_UPDATE_OS:-no}
 UPDATE=${UPDATE:-yes}
 TLS=${TLS:-yes}
 OMR_ADMIN=${OMR_ADMIN:-yes}
+OMR_ADMIN_SOURCE=${OMR_ADMIN_SOURCE:-no}
 OMR_ADMIN_PASS=${OMR_ADMIN_PASS:-$(od -vN "32" -An -tx1 /dev/urandom | tr '[:lower:]' '[:upper:]' | tr -d " \n")}
 OMR_ADMIN_PASS_ADMIN=${OMR_ADMIN_PASS_ADMIN:-$(od -vN "32" -An -tx1 /dev/urandom | tr '[:lower:]' '[:upper:]' | tr -d " \n")}
+GATHER_DEFAULT_VPN=${GATHER_DEFAULT_VPN:-glorytun_tcp}
+GATHER_DEFAULT_PROXY=${GATHER_DEFAULT_PROXY:-shadowsocks-rust}
+GATHER_MPTCP_PROFILE=${GATHER_MPTCP_PROFILE:-balanced}
+GATHER_MPTCP_SCHEDULER=${GATHER_MPTCP_SCHEDULER:-}
+GATHER_KERNEL_IMAGE_DEB_URL=${GATHER_KERNEL_IMAGE_DEB_URL:-}
+GATHER_KERNEL_HEADERS_DEB_URL=${GATHER_KERNEL_HEADERS_DEB_URL:-}
 OMR_METRICS=${OMR_METRICS:-no}
 OMR_AI=${OMR_AI:-no}
 MLVPN=${MLVPN:-yes}
@@ -91,8 +98,10 @@ MLVPN_BINARY_VERSION="3.0.0+20211028.git.ddafba3"
 UBOND_VERSION="31af0f69ebb6d07ed9348dca2fced33b956cedee"
 OBFS_VERSION="486bebd9208539058e57e23a12f23103016e09b4"
 OBFS_BINARY_VERSION="0.0.5-1"
-OMR_ADMIN_VERSION="3c14ef0e21168dba40a673d6457c24feb371b688"
-OMR_ADMIN_BINARY_VERSION="0.18+20260625"
+OMR_ADMIN_VERSION=${OMR_ADMIN_VERSION:-3c14ef0e21168dba40a673d6457c24feb371b688}
+OMR_ADMIN_REPO=${OMR_ADMIN_REPO:-Ysurac/openmptcprouter-vps-admin}
+OMR_ADMIN_ZIP_URL=${OMR_ADMIN_ZIP_URL:-https://github.com/${OMR_ADMIN_REPO}/archive/${OMR_ADMIN_VERSION}.zip}
+OMR_ADMIN_BINARY_VERSION=${OMR_ADMIN_BINARY_VERSION:-0.18+20260625}
 DSVPN_VERSION="3b99d2ef6c02b2ef68b5784bec8adfdd55b29b1a"
 DSVPN_BINARY_VERSION="0.1.4-2"
 MQVPN_VERSION="0.7.0-1"
@@ -670,11 +679,34 @@ elif [ "$KERNEL" = "6.18" ]; then
 	dpkg --force-all -i -B /tmp/linux-image-${KERNEL_VERSION}-${KERNEL_REV}.${PSABI}-omr_${KERNEL_VERSION}-${KERNEL_REV}.${PSABI}-omr_${ARCH}.deb
 	set_grub_default_kernel "${KERNEL_VERSION}" "${PSABI}-omr"
 elif [ "$KERNEL" = "6.6" ] && [ "$ID" = "debian" ]; then
-	echo 'deb http://deb.debian.org/debian bookworm-backports main' > /etc/apt/sources.list.d/bookworm-backports.list
-	apt-get update
-	latestkernel=$(apt-cache search linux-image-6.6 | grep -v headers | grep -v dbg | grep -v rt | tail -n 1 | cut -d" " -f1)
-	latestkernelheaders=$(echo $latestkernel | sed 's/image/headers/g')
-	apt-get -y install $latestkernel $latestkernelheaders
+	if [ "$VERSION_ID" != "12" ]; then
+		echo "KERNEL=6.6 Gather image requires Debian 12/bookworm so the backports kernel source is predictable."
+		exit 1
+	fi
+	if [ -n "$GATHER_KERNEL_IMAGE_DEB_URL" ] || [ -n "$GATHER_KERNEL_HEADERS_DEB_URL" ]; then
+		if [ -z "$GATHER_KERNEL_IMAGE_DEB_URL" ] || [ -z "$GATHER_KERNEL_HEADERS_DEB_URL" ]; then
+			echo "Set both GATHER_KERNEL_IMAGE_DEB_URL and GATHER_KERNEL_HEADERS_DEB_URL for a pinned 6.6 image build."
+			exit 1
+		fi
+		wget -O /tmp/gather-linux-image-6.6.deb "$GATHER_KERNEL_IMAGE_DEB_URL"
+		wget -O /tmp/gather-linux-headers-6.6.deb "$GATHER_KERNEL_HEADERS_DEB_URL"
+		dpkg --force-all -i -B /tmp/gather-linux-headers-6.6.deb
+		dpkg --force-all -i -B /tmp/gather-linux-image-6.6.deb
+	else
+		echo 'deb http://deb.debian.org/debian bookworm-backports main' > /etc/apt/sources.list.d/bookworm-backports.list
+		apt-get update
+		latestkernel=$(apt-cache search '^linux-image-6\.6\..*-amd64 ' | grep -v headers | grep -v dbg | grep -v rt | tail -n 1 | cut -d" " -f1)
+		if [ -z "$latestkernel" ]; then
+			echo "No linux-image-6.6.*-amd64 package found in bookworm-backports. Stop image build instead of producing a non-MPTCP/unknown kernel image."
+			exit 1
+		fi
+		latestkernelheaders=$(echo $latestkernel | sed 's/image/headers/g')
+		apt-get -y install $latestkernel $latestkernelheaders
+		if ! dpkg -l | grep -q "$latestkernel"; then
+			echo "Kernel package $latestkernel was not installed correctly."
+			exit 1
+		fi
+	fi
 	[ -f /etc/default/grub ] && {
 		sed -i "s@^\(GRUB_DEFAULT=\).*@\1\"0\"@" /etc/default/grub >/dev/null 2>&1
 		[ -f /boot/grub/grub.cfg ] && grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1
@@ -1033,24 +1065,23 @@ if [ "$OMR_ADMIN" = "yes" ]; then
 	fi
 	mkdir -p /etc/openmptcprouter-vps-admin/omr-6in4
 	mkdir -p /etc/openmptcprouter-vps-admin/intf
-	#[ ! -f "/etc/openmptcprouter-vps-admin/current-vpn" ] && echo "glorytun_tcp" > /etc/openmptcprouter-vps-admin/current-vpn
-	[ ! -f "/etc/openmptcprouter-vps-admin/current-vpn" ] && echo "openvpn" > /etc/openmptcprouter-vps-admin/current-vpn
+	[ ! -f "/etc/openmptcprouter-vps-admin/current-vpn" ] && echo "$GATHER_DEFAULT_VPN" > /etc/openmptcprouter-vps-admin/current-vpn
+	[ ! -f "/etc/openmptcprouter-vps-admin/current-proxy" ] && echo "$GATHER_DEFAULT_PROXY" > /etc/openmptcprouter-vps-admin/current-proxy
 	mkdir -p /var/opt/openmptcprouter
-	if [ "$SOURCES" = "yes" ]; then
+	if [ "$SOURCES" = "yes" ] || [ "$OMR_ADMIN_SOURCE" = "yes" ]; then
 		if [ "$LOCALFILES" = "no" ]; then
 			wget -O /lib/systemd/system/omr-admin.service ${VPSURL}${VPSPATH}/omr-admin.service.in
 			#wget -O /lib/systemd/system/omr-admin-ipv6.service ${VPSURL}${VPSPATH}/omr-admin-ipv6.service.in
 		else
 			cp ${DIR}/omr-admin.service.in /lib/systemd/system/omr-admin.service
 		fi
-		wget -O /tmp/openmptcprouter-vps-admin.zip https://github.com/Ysurac/openmptcprouter-vps-admin/archive/${OMR_ADMIN_VERSION}.zip
+		wget -O /tmp/openmptcprouter-vps-admin.zip "$OMR_ADMIN_ZIP_URL"
 		cd /tmp
 		unzip -q -o openmptcprouter-vps-admin.zip
-		if [ -f /tmp/openmptcprouter-vps-admin-${OMR_ADMIN_VERSION}/omr-admin.py ]; then
-			cp /tmp/openmptcprouter-vps-admin-${OMR_ADMIN_VERSION}/omr-admin.py /usr/bin/
-		else
-			cp /tmp/openmptcprouter-vps-admin-${OMR_ADMIN_VERSION}/omradmin.py /usr/bin/
-		fi
+		OMR_ADMIN_EXTRACTED_DIR="/tmp/openmptcprouter-vps-admin-${OMR_ADMIN_VERSION}"
+		OMR_ADMIN_SCRIPT="${OMR_ADMIN_EXTRACTED_DIR}/omr-admin.py"
+		[ ! -f "$OMR_ADMIN_SCRIPT" ] && OMR_ADMIN_SCRIPT="${OMR_ADMIN_EXTRACTED_DIR}/omradmin.py"
+		cp "$OMR_ADMIN_SCRIPT" /usr/bin/omr-admin.py
 		if [ -f /etc/openmptcprouter-vps-admin/omr-admin-config.json ]; then
 			OMR_ADMIN_PASS2=$(grep -Po '"'"pass"'"\s*:\s*"\K([^"]*)' /etc/openmptcprouter-vps-admin/omr-admin-config.json | tr -d  "\n")
 			[ -z "$OMR_ADMIN_PASS2" ] && OMR_ADMIN_PASS2=$(cat /etc/openmptcprouter-vps-admin/omr-admin-config.json | jq -r .users[0].openmptcprouter.user_password | tr -d "\n")
@@ -1058,15 +1089,15 @@ if [ "$OMR_ADMIN" = "yes" ]; then
 			OMR_ADMIN_PASS_ADMIN2=$(cat /etc/openmptcprouter-vps-admin/omr-admin-config.json | jq -r .users[0].admin.user_password | tr -d "\n")
 			[ -n "$OMR_ADMIN_PASS_ADMIN2" ] && OMR_ADMIN_PASS_ADMIN=$OMR_ADMIN_PASS_ADMIN2
 		else
-			cp /tmp/openmptcprouter-vps-admin-${OMR_ADMIN_VERSION}/omr-admin.py /usr/bin/
+			cp "$OMR_ADMIN_SCRIPT" /usr/bin/omr-admin.py
 			cd /etc/openmptcprouter-vps-admin
 		fi
 		if [ "$(grep user_password /etc/openmptcprouter-vps-admin/omr-admin-config.json)" = "" ]; then
-			cp /tmp/openmptcprouter-vps-admin-${OMR_ADMIN_VERSION}/omr-admin-config.json /etc/openmptcprouter-vps-admin/
-			cp /tmp/openmptcprouter-vps-admin-${OMR_ADMIN_VERSION}/omr-admin.py /usr/bin/
+			cp "${OMR_ADMIN_EXTRACTED_DIR}/omr-admin-config.json" /etc/openmptcprouter-vps-admin/
+			cp "$OMR_ADMIN_SCRIPT" /usr/bin/omr-admin.py
 			cd /etc/openmptcprouter-vps-admin
 		fi
-		rm -rf /tmp/tmp/openmptcprouter-vps-admin-${OMR_ADMIN_VERSION}
+		rm -rf "$OMR_ADMIN_EXTRACTED_DIR"
 		chmod u+x /usr/bin/omr-admin.py
 	else
 		if [ -f /etc/openmptcprouter-vps-admin/omr-admin-config.json ]; then
@@ -1156,6 +1187,53 @@ else
 		cp ${DIR}/shadowsocks.6.1.conf /etc/sysctl.d/90-shadowsocks.conf
 	else
 		cp ${DIR}/shadowsocks.conf /etc/sysctl.d/90-shadowsocks.conf
+	fi
+fi
+
+gather_resolve_mptcp_scheduler() {
+	kernel_family="$1"
+	scheduler="$GATHER_MPTCP_SCHEDULER"
+	if [ -z "$scheduler" ]; then
+		case "$GATHER_MPTCP_PROFILE" in
+			reliable)
+				[ "$kernel_family" = "v1" ] && scheduler="bpf_red" || scheduler="redundant"
+				;;
+			roundrobin)
+				[ "$kernel_family" = "v1" ] && scheduler="bpf_rr" || scheduler="roundrobin"
+				;;
+			balanced|*)
+				[ "$kernel_family" = "v1" ] && scheduler="bpf_burst" || scheduler="blest"
+				;;
+		esac
+	fi
+	if [ "$kernel_family" = "v0" ]; then
+		case "$scheduler" in
+			bpf_red|red|reliable) scheduler="redundant" ;;
+			bpf_rr|rr) scheduler="roundrobin" ;;
+			bpf_burst|burst|mptcp_burst|balanced) scheduler="blest" ;;
+			bpf_bkup|backup|bkup|bpf_first|first) scheduler="default" ;;
+		esac
+	else
+		case "$scheduler" in
+			redundant|red|reliable) scheduler="bpf_red" ;;
+			roundrobin|rr) scheduler="bpf_rr" ;;
+			mptcp_burst|burst|balanced) scheduler="bpf_burst" ;;
+			backup|bkup) scheduler="bpf_bkup" ;;
+			first) scheduler="bpf_first" ;;
+		esac
+	fi
+	echo "$scheduler"
+}
+
+if [ -f /etc/sysctl.d/90-shadowsocks.conf ]; then
+	if [ "$KERNEL" != "5.4" ]; then
+		GATHER_RESOLVED_MPTCP_SCHEDULER=$(gather_resolve_mptcp_scheduler v1)
+		sed -i '/^net\.mptcp\.mptcp_scheduler[[:space:]]*=/d;/^net\.mptcp\.scheduler[[:space:]]*=/d' /etc/sysctl.d/90-shadowsocks.conf
+		echo "net.mptcp.scheduler=${GATHER_RESOLVED_MPTCP_SCHEDULER}" >> /etc/sysctl.d/90-shadowsocks.conf
+	else
+		GATHER_RESOLVED_MPTCP_SCHEDULER=$(gather_resolve_mptcp_scheduler v0)
+		sed -i '/^net\.mptcp\.mptcp_scheduler[[:space:]]*=/d;/^net\.mptcp\.scheduler[[:space:]]*=/d' /etc/sysctl.d/90-shadowsocks.conf
+		echo "net.mptcp.mptcp_scheduler=${GATHER_RESOLVED_MPTCP_SCHEDULER}" >> /etc/sysctl.d/90-shadowsocks.conf
 	fi
 fi
 
@@ -2543,6 +2621,8 @@ if [ "$update" = "0" ]; then
 	if [ "$SHADOWSOCKS_GO" = "yes" ]; then
 		cat >> /root/openmptcprouter_config.txt <<-EOF
 		Your shadowsocks 2022 key: ${PSK}:${UPSK}
+		Shadowsocks-Go shared port: 65280
+		Shadowsocks-Go local stats API: 127.0.0.1:65279
 		EOF
 	fi
 	if ([ "$GLORYTUN_TCP" = "yes" ] || [ "$GLORYTUN_UDP" = "yes" ]); then

@@ -1,0 +1,69 @@
+#!/bin/sh
+#
+# Gather VPS image/bootstrap entrypoint.
+#
+# Use this wrapper for HEXUN/Gather managed OMR nodes instead of invoking the
+# upstream installer directly. It pins the product defaults expected by the
+# cloud platform while keeping the upstream script as the implementation.
+
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+# Gather production image default:
+# 6.12 has been observed not aggregating reliably on current nodes. Use 6.6
+# unless a later kernel is explicitly validated by gather-mptcp-check.
+: "${KERNEL:=6.6}"
+: "${SHADOWSOCKS:=yes}"
+: "${SHADOWSOCKS_GO:=yes}"
+: "${GLORYTUN_TCP:=yes}"
+: "${GLORYTUN_UDP:=yes}"
+: "${MQVPN:=yes}"
+: "${OPENVPN:=yes}"
+: "${DSVPN:=yes}"
+: "${WIREGUARD:=yes}"
+
+: "${GATHER_DEFAULT_VPN:=glorytun_tcp}"
+: "${GATHER_DEFAULT_PROXY:=shadowsocks-rust}"
+: "${GATHER_MPTCP_PROFILE:=balanced}"
+: "${GATHER_KERNEL_IMAGE_DEB_URL:=}"
+: "${GATHER_KERNEL_HEADERS_DEB_URL:=}"
+
+# Set OMR_ADMIN_REPO/OMR_ADMIN_VERSION to the Gather-patched vps-admin commit
+# that contains /traffic before building production images.
+: "${OMR_ADMIN_SOURCE:=yes}"
+: "${OMR_ADMIN_REPO:=Ysurac/openmptcprouter-vps-admin}"
+: "${OMR_ADMIN_VERSION:=develop}"
+
+export KERNEL SHADOWSOCKS SHADOWSOCKS_GO GLORYTUN_TCP GLORYTUN_UDP MQVPN OPENVPN DSVPN WIREGUARD
+export GATHER_DEFAULT_VPN GATHER_DEFAULT_PROXY GATHER_MPTCP_PROFILE
+export GATHER_KERNEL_IMAGE_DEB_URL GATHER_KERNEL_HEADERS_DEB_URL
+export OMR_ADMIN_SOURCE OMR_ADMIN_REPO OMR_ADMIN_VERSION
+
+echo "Gather VPS bootstrap"
+echo "  kernel: ${KERNEL}"
+echo "  default vpn/proxy: ${GATHER_DEFAULT_VPN} / ${GATHER_DEFAULT_PROXY}"
+echo "  mptcp profile: ${GATHER_MPTCP_PROFILE}"
+echo "  omr-admin: ${OMR_ADMIN_REPO}@${OMR_ADMIN_VERSION}"
+if [ -n "$GATHER_KERNEL_IMAGE_DEB_URL" ]; then
+    echo "  kernel deb: pinned URL"
+else
+    echo "  kernel deb: Debian bookworm-backports lookup"
+fi
+
+if [ -f "${SCRIPT_DIR}/gather-mptcp-check.sh" ]; then
+    install -m 0755 "${SCRIPT_DIR}/gather-mptcp-check.sh" /usr/local/sbin/gather-mptcp-check || true
+fi
+
+set +e
+"${SCRIPT_DIR}/debian12-x86_64.sh" "$@"
+rc=$?
+set -e
+
+if [ -x /usr/local/sbin/gather-mptcp-check ]; then
+    echo "Gather MPTCP capability check (current boot):"
+    /usr/local/sbin/gather-mptcp-check || true
+    echo "Run gather-mptcp-check again after rebooting into the installed kernel."
+fi
+
+exit "$rc"
