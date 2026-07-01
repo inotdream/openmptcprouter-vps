@@ -39,6 +39,7 @@ GATHER_DEFAULT_VPN=${GATHER_DEFAULT_VPN:-glorytun_tcp}
 GATHER_DEFAULT_PROXY=${GATHER_DEFAULT_PROXY:-shadowsocks-rust}
 GATHER_MPTCP_PROFILE=${GATHER_MPTCP_PROFILE:-balanced}
 GATHER_MPTCP_SCHEDULER=${GATHER_MPTCP_SCHEDULER:-}
+GATHER_REQUIRE_BPF_SCHEDULERS=${GATHER_REQUIRE_BPF_SCHEDULERS:-yes}
 GATHER_KERNEL_IMAGE_DEB_URL=${GATHER_KERNEL_IMAGE_DEB_URL:-}
 GATHER_KERNEL_HEADERS_DEB_URL=${GATHER_KERNEL_HEADERS_DEB_URL:-}
 OMR_METRICS=${OMR_METRICS:-no}
@@ -138,8 +139,8 @@ echo "Check user..."
 if [ "$(id -u)" -ne 0 ]; then echo 'Please run as root.' >&2; exit 1; fi
 
 # Check Kernel
-if [ "$KERNEL" != "5.4" ] && [ "$KERNEL" != "6.1" ] && [ "$KERNEL" != "6.6" ] && [ "$KERNEL" != "6.10" ] && [ "$KERNEL" != "6.11" ] && [ "$KERNEL" != "6.12" ] && [ "$KERNEL" != "6.18" ]; then
-	echo "Only kernels 5.4, 6.1, 6.6, 6.10, 6.11, 6.12  and 6.18 are currently supported"
+if [ "$KERNEL" != "5.4" ] && [ "$KERNEL" != "6.1" ] && [ "$KERNEL" != "6.6" ] && [ "$KERNEL" != "6.6-xanmod" ] && [ "$KERNEL" != "6.10" ] && [ "$KERNEL" != "6.11" ] && [ "$KERNEL" != "6.12" ] && [ "$KERNEL" != "6.18" ]; then
+	echo "Only kernels 5.4, 6.1, 6.6, 6.6-xanmod, 6.10, 6.11, 6.12 and 6.18 are currently supported"
 	exit 1
 fi
 
@@ -538,7 +539,7 @@ if [ "$KERNEL" = "5.4" ] || [ "$KERNEL" = "5.15" ]; then
 	bash update-grub.sh ${KERNEL_VERSION}-mptcp
 	bash update-grub.sh ${KERNEL_RELEASE}
 	[ -f /boot/grub/grub.cfg ] && sed -i 's/default="1>0"/default="0"/' /boot/grub/grub.cfg >/dev/null 2>&1
-elif [ "$KERNEL" = "6.6" ] && [ "$ARCH" = "amd64" ]; then
+elif [ "$KERNEL" = "6.6-xanmod" ] && [ "$ARCH" = "amd64" ]; then
 	# awk command from xanmod website
 	PSABI=$(awk 'BEGIN { while (!/flags/) if (getline < "/proc/cpuinfo" != 1) exit 1; if (/lm/&&/cmov/&&/cx8/&&/fpu/&&/fxsr/&&/mmx/&&/syscall/&&/sse2/) level = 1; if (level == 1 && /cx16/&&/lahf/&&/popcnt/&&/sse4_1/&&/sse4_2/&&/ssse3/) level = 2; if (level == 2 && /avx/&&/avx2/&&/bmi1/&&/bmi2/&&/f16c/&&/fma/&&/abm/&&/movbe/&&/xsave/) level = 3; if (level == 3 && /avx512f/&&/avx512bw/&&/avx512cd/&&/avx512dq/&&/avx512vl/) level = 4; if (level > 0) { print "x64v" level; exit level + 1 }; exit 1;}' | tr -d "\n")
 	#'
@@ -707,8 +708,11 @@ elif [ "$KERNEL" = "6.6" ] && [ "$ID" = "debian" ]; then
 			exit 1
 		fi
 	fi
+	target_kernel="$(ls /boot/vmlinuz-* 2>/dev/null | sed 's@.*/vmlinuz-@@' | grep '^6\.6\.' | sort -V | tail -n 1)"
+	if [ -n "$target_kernel" ]; then
+		set_grub_default_kernel "$target_kernel" "" || true
+	fi
 	[ -f /etc/default/grub ] && {
-		sed -i "s@^\(GRUB_DEFAULT=\).*@\1\"0\"@" /etc/default/grub >/dev/null 2>&1
 		[ -f /boot/grub/grub.cfg ] && grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1
 	}
 else 
@@ -722,14 +726,22 @@ else
 fi
 fi # IS_CONTAINER check
 
-if [ "$KERNEL" = "6.18" ]; then
+if [ "$KERNEL" = "6.18" ] || [ "$KERNEL" = "6.6" ]; then
 	
-	echo "Install MPTCP BPF schedulers for kernel 6.18..."
+	echo "Install MPTCP BPF schedulers for kernel ${KERNEL}..."
 	for pkg in mptcp-bpf-bkup mptcp-bpf-burst mptcp-bpf-first mptcp-bpf-red mptcp-bpf-rr; do
 		if ! apt-get -o Dpkg::Options::="--force-confold" -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-overwrite" -y install ${pkg}=${MPTCP_BPF_VERSION}; then
-			wget -O /tmp/${pkg}_${MPTCP_BPF_VERSION}_${ARCH}.deb ${VPSURL}debian/${pkg}_${MPTCP_BPF_VERSION}_${ARCH}.deb
-			dpkg --force-confold --force-confdef --force-overwrite -i /tmp/${pkg}_${MPTCP_BPF_VERSION}_${ARCH}.deb
-			rm -f /tmp/${pkg}_${MPTCP_BPF_VERSION}_${ARCH}.deb
+			if wget -O /tmp/${pkg}_${MPTCP_BPF_VERSION}_${ARCH}.deb ${VPSURL}debian/${pkg}_${MPTCP_BPF_VERSION}_${ARCH}.deb; then
+				dpkg --force-confold --force-confdef --force-overwrite -i /tmp/${pkg}_${MPTCP_BPF_VERSION}_${ARCH}.deb || bpf_pkg_failed=1
+				rm -f /tmp/${pkg}_${MPTCP_BPF_VERSION}_${ARCH}.deb
+			else
+				bpf_pkg_failed=1
+			fi
+			if [ "${bpf_pkg_failed:-0}" = "1" ] && [ "$GATHER_REQUIRE_BPF_SCHEDULERS" = "yes" ]; then
+				echo "Required MPTCP BPF package ${pkg} could not be installed."
+				exit 1
+			fi
+			bpf_pkg_failed=0
 		fi
 	done
 fi

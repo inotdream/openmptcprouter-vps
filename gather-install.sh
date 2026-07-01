@@ -30,6 +30,7 @@ RAW_BASE=${GATHER_VPS_RAW_BASE:-https://raw.githubusercontent.com/inotdream/open
 : "${GATHER_DEFAULT_VPN:=glorytun_tcp}"
 : "${GATHER_DEFAULT_PROXY:=shadowsocks-rust}"
 : "${GATHER_MPTCP_PROFILE:=balanced}"
+: "${GATHER_REQUIRE_BPF_SCHEDULERS:=yes}"
 : "${GATHER_KERNEL_IMAGE_DEB_URL:=}"
 : "${GATHER_KERNEL_HEADERS_DEB_URL:=}"
 
@@ -41,6 +42,7 @@ RAW_BASE=${GATHER_VPS_RAW_BASE:-https://raw.githubusercontent.com/inotdream/open
 
 export KERNEL UPDATE_OS FORCE_UPDATE_OS SHADOWSOCKS SHADOWSOCKS_GO GLORYTUN_TCP GLORYTUN_UDP MQVPN OPENVPN DSVPN WIREGUARD
 export GATHER_DEFAULT_VPN GATHER_DEFAULT_PROXY GATHER_MPTCP_PROFILE
+export GATHER_REQUIRE_BPF_SCHEDULERS
 export GATHER_KERNEL_IMAGE_DEB_URL GATHER_KERNEL_HEADERS_DEB_URL
 export OMR_ADMIN_SOURCE OMR_ADMIN_REPO OMR_ADMIN_VERSION
 
@@ -59,6 +61,7 @@ echo "  kernel: ${KERNEL}"
 echo "  update os: ${UPDATE_OS}"
 echo "  default vpn/proxy: ${GATHER_DEFAULT_VPN} / ${GATHER_DEFAULT_PROXY}"
 echo "  mptcp profile: ${GATHER_MPTCP_PROFILE}"
+echo "  require bpf schedulers: ${GATHER_REQUIRE_BPF_SCHEDULERS}"
 echo "  omr-admin: ${OMR_ADMIN_REPO}@${OMR_ADMIN_VERSION}"
 if [ -n "$GATHER_KERNEL_IMAGE_DEB_URL" ]; then
     echo "  kernel deb: pinned URL"
@@ -81,6 +84,30 @@ fi
 if [ -s "${SCRIPT_DIR}/gather-mptcp-check.sh" ]; then
     install -m 0755 "${SCRIPT_DIR}/gather-mptcp-check.sh" /usr/local/sbin/gather-mptcp-check || true
 fi
+
+install_mptcp_boot_check() {
+    [ -x /usr/local/sbin/gather-mptcp-check ] || return 0
+    mkdir -p /var/lib/gather
+    cat >/etc/systemd/system/gather-mptcp-boot-check.service <<'EOF'
+[Unit]
+Description=Gather MPTCP boot capability check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=GATHER_REQUIRE_BPF_SCHEDULERS=yes
+ExecStart=/bin/sh -c '/usr/local/sbin/gather-mptcp-check >/var/lib/gather/mptcp-check.env 2>&1'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl enable gather-mptcp-boot-check.service >/dev/null 2>&1 || true
+}
+
+install_mptcp_boot_check
 
 set +e
 "${SCRIPT_DIR}/debian12-x86_64.sh" "$@"
